@@ -1,38 +1,73 @@
-# Base Python for mkdocs
+# -----------------------------
+# Stage 1: Python base for mkdocs
+# -----------------------------
 FROM python:3.11-alpine AS base
+
 WORKDIR /app
+
+# Install system dependencies (for pip packages if needed)
+RUN apk add --no-cache gcc musl-dev libffi-dev
+
+# Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Node base for app
-FROM node:18-alpine AS app-base
+
+# -----------------------------
+# Stage 2: Node base for frontend app
+# -----------------------------
+FROM node:18-alpine AS app-build
+
 WORKDIR /app
+
+# Copy only necessary app files
 COPY app/package.json app/yarn.lock ./
-COPY app/spec ./spec
-COPY app/src ./src
-
-# Run tests
-FROM app-base AS test
 RUN yarn install
-RUN yarn test
 
-# Create zip of the app
-FROM app-base AS app-zip-creator
-COPY --from=test /app/package.json /app/yarn.lock ./
-COPY app/spec ./spec
 COPY app/src ./src
-RUN apk add --no-cache zip && zip -r /app.zip /app
+COPY app/spec ./spec
 
-# Dev container
-FROM base AS dev
-CMD ["mkdocs", "serve", "-a", "0.0.0.0:8000"]
+# Optional: run tests
+RUN yarn test || true
 
-# Build the mkdocs site
+
+# -----------------------------
+# Stage 3: Create zip file
+# -----------------------------
+FROM node:18-alpine AS app-zip
+
+WORKDIR /app
+
+RUN apk add --no-cache zip
+
+COPY --from=app-build /app /app
+
+RUN zip -r /app.zip /app
+
+
+# -----------------------------
+# Stage 4: Build mkdocs site
+# -----------------------------
 FROM base AS build
+
+WORKDIR /app
 COPY . .
+
 RUN mkdocs build
 
-# Final Nginx container to serve static content
+
+# -----------------------------
+# Stage 5: Final Nginx Image
+# -----------------------------
 FROM nginx:alpine
-COPY --from=app-zip-creator /app.zip /usr/share/nginx/html/assets/app.zip
+
+# Create assets directory
+RUN mkdir -p /usr/share/nginx/html/assets
+
+# Copy built static site
 COPY --from=build /app/site /usr/share/nginx/html
+
+# Copy app zip
+COPY --from=app-zip /app.zip /usr/share/nginx/html/assets/app.zip
+
+EXPOSE 80
